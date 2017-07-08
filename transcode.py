@@ -5,6 +5,7 @@ import os
 import os.path
 import platform
 import subprocess
+import shutil
 from xml.etree import ElementTree as ET
 
 def runShellCommand(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
@@ -28,7 +29,7 @@ class FileProcess:
         if not os.path.exists(self.dstDirectory):
             os.makedirs(self.dstDirectory)
 
-        self.ffprobePrefix = "ffprobe -v error -show_entries format -select_streams v -show_entries stream -of xml -i "
+        self.ffprobePrefix = "ffprobe -v error -show_entries format -show_entries stream -of xml -i "
 
     def browserDirectory(self):
         system = platform.system();
@@ -43,8 +44,15 @@ class FileProcess:
         list_dirs = os.walk(self.srcDirectory)
         for root, dirs, files in list_dirs:
             for f in files:
-                self.srcFile = os.path.join(root, f)
-                print f;
+                """Strip space character in fileName"""
+                newFileName = f.replace(' ', '')
+                if f != newFileName:
+                    os.rename(os.path.join(root, f), os.path.join(root, newFileName))
+                    self.srcFile = os.path.join(root,newFileName)
+                else:
+                    self.srcFile = os.path.join(root, f)
+                print self.srcFile;
+
                 ffprobeCmd = self.cmdPath + self.ffprobePrefix + self.srcFile
                 xml = runShellCommand(ffprobeCmd)
                 if xml is None:
@@ -52,8 +60,10 @@ class FileProcess:
                     continue
 
                 srcFileInfo = MediaXMlParser().parser(xml)
-
                 ffmpegCmd = self.buildFFmpegCommand(srcFileInfo)
+                if ffmpegCmd is None:
+                    continue
+
                 transcodeStatus = runShellCommand(ffmpegCmd)
                 if transcodeStatus is None:
                     failedFiles.append(self.srcFile  + " ffmpeg")
@@ -67,17 +77,32 @@ class FileProcess:
         fileHandle.close()
 
         '''Remove unused file that generate in ffmpeg pass 1'''
-        os.remove('ffmpeg2pass-0.log')
-        os.remove('ffmpeg2pass-0.log.mbtree')
+        if os.path.exists('ffmpeg2pass-0.log'):
+            os.remove('ffmpeg2pass-0.log')
+        if os.path.exists('ffmpeg2pass-0.log.mbtree'):
+            os.remove('ffmpeg2pass-0.log.mbtree')
 
-    def buildFFmpegCommand(self, fileInfo):
+    def buildFFmpegCommand(self, info):
         '''buidFFmpegCommand'''
 
         fileName = self.srcFile.split(os.sep)[-1]
         dstFile = self.dstDirectory + os.sep + fileName[0:fileName.rfind('.')] + '.mp4'
 
+        ''''File is suitable for streaming, no transcode'''
+        if (info.get('gFormatName').find('mp4') != -1) and  (info.get('vCodecName') == 'h264') \
+            and  (info.get('aCodecName') == 'aac') and (string.atoi(info.get('vBitRate')) <= 800000) \
+            and ((string.atoi(info.get('vWidth')) <= 856) or (string.atoi(info.get('vHeight')) <= 480)):
+
+            print "Not transcode, Copying: " + self.srcFile + " ------> " + dstFile
+
+            try:
+                shutil.copy(self.srcFile, dstFile)
+            except IOError, e:
+                print e
+            return None
+
         """IDR frame interval"""
-        vDuration = int(string.atof(fileInfo.get('gDuration')))
+        vDuration = int(string.atof(info.get('gDuration')))
         if vDuration <= 10 : interval = 1
         elif vDuration > 10 and vDuration <= 30 : interval = 3
         else: interval = 0
@@ -89,8 +114,8 @@ class FileProcess:
             width/height > 16:10, eg:16:9, 16:10, 5:3 -> 856x480 
             other width/height < 16:10                -> 640x480
         """
-        width   = fileInfo.get('vWidth')
-        height  = fileInfo.get('vHeight')
+        width   = info.get('vWidth')
+        height  = info.get('vHeight')
         if string.atoi(width) <= 640 or string.atoi(height) <= 480:
             vResolution = width + "x" + height
         else :
@@ -102,13 +127,17 @@ class FileProcess:
             print  aspectRatio
 
         '''vFrameRate: > 25fps -> 25fps, <= 25fps  --> origin fps'''
-        ele = fileInfo.get('vFrameRate').split('/')
+        ele = info.get('vFrameRate').split('/')
         frameRate = string.atof(ele[0]) / string.atof(ele[1])
         if frameRate > 25: vFrameRate = 25
         else: vFrameRate = round(frameRate,3)
 
-        '''BitRate: TotalBitRate(1000k) = vBR(872k) +aBR(128k)'''
-        ABR_VBV = '-b:v 872k -maxrate 872k -bufsize 1600k'
+        '''BitRate: TotalBitRate(928k) = vBR(800k) +aBR(128k)'''
+        ABR_VBV = '-b:v 800k -maxrate 800k -bufsize 1600k'
+
+        '''audio bitrate'''
+        if string.atoi(info.get('aBitRate')) <= 128000: aBR = info.get('aBitRate')
+        else: aBR = '128k'
 
         system = platform.system();
         if system == "Windows":
@@ -116,13 +145,14 @@ class FileProcess:
         elif system == "Darwin" or system == "Linux":
             cmdJoinSep = " /dev/null && "
 
+
         # ffmpegCmd = 'ffmpeg -i backup235.ts -c:v libx264 -b:v 1M -maxrate 1M -bufsize 2M -pass 1 -f mp4 /dev/null -y && ' \
         #             'ffmpeg -i backup235.ts -c:v libx264 -b:v 1M -maxrate 1M -bufsize 2M -pass 2 twopass.mp4 -y'
 
-        ffmpegPass1 = '%sffmpeg -i %s -pass 1 -y -v error -c:v libx264  %s -s:v %s -r %s -c:a aac -ar 44100 -ac 2 -ab 128k %s -f mp4 ' \
-                      % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, ABR_VBV)
-        ffmpegPass2 = '%sffmpeg -i %s -pass 2 -y -v error -c:v libx264  %s -s:v %s -r %s -c:a aac -ar 44100 -ac 2 -ab 128k %s %s' \
-                      % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, ABR_VBV, dstFile)
+        ffmpegPass1 = '%sffmpeg -i %s -pass 1 -y -v error -c:v libx264  %s -s:v %s -r %s -c:a aac -ar 44100 -ac 2 -ab %s %s -f mp4 ' \
+                      % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, aBR, ABR_VBV)
+        ffmpegPass2 = '%sffmpeg -i %s -pass 2 -y -v error -c:v libx264  %s -s:v %s -r %s -c:a aac -ar 44100 -ac 2 -ab %s %s %s' \
+                      % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, aBR, ABR_VBV, dstFile)
 
         ffmpegCmd = ffmpegPass1 + cmdJoinSep + ffmpegPass2
 
@@ -148,13 +178,13 @@ class MediaXMlParser:
             if child.tag == 'format':
                 self.getGeneralInfo(child)
             elif child.tag == 'streams':
-                subchild = child[0]
-                if subchild.tag == "stream" and subchild.attrib['codec_type'] == "video":
-                    self.getVideolInfo(subchild)
+                for subchild in child:
+                    if subchild.tag == "stream" and subchild.attrib['codec_type'] == "video":
+                        self.getVideolInfo(subchild)
+                    if subchild.tag == "stream" and subchild.attrib['codec_type'] == "audio":
+                        self.getAudiolInfo(subchild)
 
-        for item in self.mediaInfo:
-            print item + " : " + self.mediaInfo[item]
-
+        print self.mediaInfo
 
         return  self.mediaInfo
 
@@ -163,9 +193,12 @@ class MediaXMlParser:
             self.mediaInfo.update({'gDuration':element.attrib['duration'].replace(' ', '')})
         if element.attrib.has_key('bit_rate'):
             self.mediaInfo.update({'gBitRate': element.attrib['bit_rate'].replace(' ', '')})
+        if element.attrib.has_key('format_name'):
+            self.mediaInfo.update({'gFormatName': element.attrib['format_name'].replace(' ', '')})
 
     def getVideolInfo(self, element):
-
+        if element.attrib.has_key('codec_name'):
+            self.mediaInfo.update({'vCodecName': element.attrib['codec_name'].replace(' ', '')})
         if element.attrib.has_key('avg_frame_rate'):
             self.mediaInfo.update({'vFrameRate': element.attrib['avg_frame_rate'].replace(' ', '')})
         if element.attrib.has_key('bit_rate'):
@@ -174,6 +207,20 @@ class MediaXMlParser:
             self.mediaInfo.update({'vWidth': element.attrib['width'].replace(' ', '')})
         if element.attrib.has_key('height'):
             self.mediaInfo.update({'vHeight': element.attrib['height'].replace(' ', '')})
+        if element.attrib.has_key('profile'):
+            self.mediaInfo.update({'vProfile': element.attrib['profile'].replace(' ', '')})
+
+    def getAudiolInfo(self, element):
+        if element.attrib.has_key('codec_name'):
+            self.mediaInfo.update({'aCodecName': element.attrib['codec_name'].replace(' ', '')})
+        if element.attrib.has_key('bit_rate'):
+            self.mediaInfo.update({'aBitRate': element.attrib['bit_rate'].replace(' ', '')})
+        if element.attrib.has_key('sample_rate'):
+            self.mediaInfo.update({'aSampleRate': element.attrib['sample_rate'].replace(' ', '')})
+        if element.attrib.has_key('channels'):
+            self.mediaInfo.update({'aChannels': element.attrib['channels'].replace(' ', '')})
+        if element.attrib.has_key('profile'):
+            self.mediaInfo.update({'aProfile': element.attrib['profile'].replace(' ', '')})
 
 if __name__ == '__main__':
     # if len(sys.argv) < 3:
