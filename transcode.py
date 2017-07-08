@@ -6,6 +6,7 @@ import os.path
 import platform
 import subprocess
 import shutil
+import traceback
 from xml.etree import ElementTree as ET
 
 def runShellCommand(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
@@ -22,14 +23,24 @@ def runShellCommand(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
 class FileProcess:
     def __init__(self):
         self.srcDirectory = "input"
-        self.dstDirectory = "output"
+        self.dstDirectory = "output" + os.sep
+        self.failedDirectory = "failed" + os.sep# transcode failed file dierctory
         self.srcFile = ''
         self.cmdPath = ''
 
         if not os.path.exists(self.dstDirectory):
             os.makedirs(self.dstDirectory)
+        if not os.path.exists(self.failedDirectory):
+            os.makedirs(self.failedDirectory)
 
         self.ffprobePrefix = "ffprobe -v error -show_entries format -show_entries stream -of xml -i "
+
+    def moveFile(self, src, dst):
+        try:
+            shutil.move(src, dst)
+        except IOError, e:
+            print e
+
 
     def browserDirectory(self):
         system = platform.system();
@@ -40,7 +51,6 @@ class FileProcess:
         elif system =="Darwin" or system == "Linux":
             pass
 
-        failedFiles = []
         list_dirs = os.walk(self.srcDirectory)
         for root, dirs, files in list_dirs:
             for f in files:
@@ -56,25 +66,21 @@ class FileProcess:
                 ffprobeCmd = self.cmdPath + self.ffprobePrefix + self.srcFile
                 xml = runShellCommand(ffprobeCmd)
                 if xml is None:
-                    failedFiles.append(self.srcFile + " ffprob")
+                    self.moveFile(self.srcFile, self.failedDirectory + newFileName)
                     continue
 
                 srcFileInfo = MediaXMlParser().parser(xml)
+                if srcFileInfo is None:
+                    self.moveFile(self.srcFile, self.failedDirectory + newFileName)
+                    continue
+
                 ffmpegCmd = self.buildFFmpegCommand(srcFileInfo)
                 if ffmpegCmd is None:
                     continue
 
                 transcodeStatus = runShellCommand(ffmpegCmd)
                 if transcodeStatus is None:
-                    failedFiles.append(self.srcFile  + " ffmpeg")
-
-        """Save transcode failed file name"""
-        fileHandle = open(self.dstDirectory + os.sep +'transcodeResult.txt', 'a')
-        fileHandle.write('\r\n **********************************************\r\n')
-        for item in failedFiles:
-            fileHandle.write(item + '\r\n');
-            print item
-        fileHandle.close()
+                    self.moveFile(self.srcFile, self.failedDirectory + newFileName)
 
         '''Remove unused file that generate in ffmpeg pass 1'''
         if os.path.exists('ffmpeg2pass-0.log'):
@@ -86,7 +92,7 @@ class FileProcess:
         '''buidFFmpegCommand'''
 
         fileName = self.srcFile.split(os.sep)[-1]
-        dstFile = self.dstDirectory + os.sep + fileName[0:fileName.rfind('.')] + '.mp4'
+        dstFile = self.dstDirectory + fileName[0:fileName.rfind('.')] + '.mp4'
 
         ''''File is suitable for streaming, no transcode'''
         if (info.get('gFormatName').find('mp4') != -1) and  (info.get('vCodecName') == 'h264') \
@@ -132,8 +138,12 @@ class FileProcess:
         if frameRate > 25: vFrameRate = 25
         else: vFrameRate = round(frameRate,3)
 
-        '''BitRate: TotalBitRate(928k) = vBR(800k) +aBR(128k)'''
-        ABR_VBV = '-b:v 800k -maxrate 800k -bufsize 1600k'
+        '''BitRate: TotalBitRate = vBR + aBR'''
+        vBR = string.atoi(info.get('vBitRate'))
+        if vBR <= 800000:
+            ABR_VBV = '-b:v %s -maxrate %s -bufsize %s' % (vBR, vBR, vBR*2)
+        else:
+            ABR_VBV = '-b:v 800k -maxrate 800k -bufsize 1600k'
 
         '''audio bitrate'''
         if string.atoi(info.get('aBitRate')) <= 128000: aBR = info.get('aBitRate')
@@ -171,18 +181,38 @@ class MediaXMlParser:
         self.mediaInfo = {}
 
     def parser(self, xmlString):
-        root = ET.fromstring(xmlString)
-        for child in root:
-            # print child.tag
+        # Strip the erorr message generate by ffprobe that before xml body.
+        xmlStart = xmlString.find('<?xml')
+        validXml = xmlString[xmlStart:]
 
-            if child.tag == 'format':
-                self.getGeneralInfo(child)
-            elif child.tag == 'streams':
-                for subchild in child:
-                    if subchild.tag == "stream" and subchild.attrib['codec_type'] == "video":
-                        self.getVideolInfo(subchild)
-                    if subchild.tag == "stream" and subchild.attrib['codec_type'] == "audio":
-                        self.getAudiolInfo(subchild)
+        # print 'xml --->' ,len(xmlString)
+        # xmlHandle = open('probe.xml', 'a')
+        # xmlHandle.write(xmlString)
+        # xmlHandle.close()
+
+        try:
+            root = ET.fromstring(validXml)
+            for child in root:
+                # print child.tag
+                if child.tag == 'format':
+                    self.getGeneralInfo(child)
+                elif child.tag == 'streams':
+                    for subchild in child:
+                        if subchild.tag == "stream" and subchild.attrib['codec_type'] == "video":
+                            self.getVideolInfo(subchild)
+                        if subchild.tag == "stream" and subchild.attrib['codec_type'] == "audio":
+                            self.getAudiolInfo(subchild)
+        except Exception, e:
+            print e
+            print traceback.print_stack()
+            return None
+
+        '''Lack of bitrate in audio/video stream, use the value in container'''
+        if not self.mediaInfo.has_key('vBitRate') and self.mediaInfo.has_key('gBitRate'):
+            bitrate = str(string.atoi(self.mediaInfo.get('gBitRate')) - 128000)
+            self.mediaInfo.update({'vBitRate': bitrate})
+        if not self.mediaInfo.has_key('aBitRate') and self.mediaInfo.has_key('gBitRate'):
+            self.mediaInfo.update({'aBitRate': '128000'})
 
         print self.mediaInfo
 
