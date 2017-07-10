@@ -40,7 +40,12 @@ class FileProcess:
             shutil.move(src, dst)
         except IOError, e:
             print e
-
+    def copyFile(self, src, dst):
+        try:
+            shutil.copy(self.srcFile, dstFile)
+        except IOError, e:
+            print e
+        return None
 
     def browserDirectory(self):
         system = platform.system();
@@ -100,14 +105,9 @@ class FileProcess:
             and ((string.atoi(info.get('vWidth')) <= 856) or (string.atoi(info.get('vHeight')) <= 480)):
 
             print "Not transcode, Copying: " + self.srcFile + " ------> " + dstFile
+            return  self.copyFile(self.srcFile, dstFile)
 
-            try:
-                shutil.copy(self.srcFile, dstFile)
-            except IOError, e:
-                print e
-            return None
-
-        """IDR frame interval"""
+        """I frame interval"""
         vDuration = int(string.atof(info.get('gDuration')))
         if vDuration <= 10 : interval = 1
         elif vDuration > 10 and vDuration <= 30 : interval = 3
@@ -199,12 +199,18 @@ class MediaXMlParser:
                 elif child.tag == 'streams':
                     for subchild in child:
                         if subchild.tag == "stream" and subchild.attrib['codec_type'] == "video":
+                            self.mediaInfo.update({'hasVideo': '1'})
                             self.getVideolInfo(subchild)
                         if subchild.tag == "stream" and subchild.attrib['codec_type'] == "audio":
+                            self.mediaInfo.update({'hasAudio': '1'})
                             self.getAudiolInfo(subchild)
         except Exception, e:
             print e
             print traceback.print_stack()
+            return None
+
+        if not self.mediaInfo.has_key('hasVideo') or not self.mediaInfo.has_key('hasAudio'):
+            print 'only video or audio'
             return None
 
         '''Lack of bitrate in audio/video stream, use the value in container'''
