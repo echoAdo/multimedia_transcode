@@ -116,8 +116,8 @@ class FileProcess:
         if interval > 0: vIDRFrameInter = '-force_key_frames "expr:gte(t,n_forced*%s)"' % interval
         else: vIDRFrameInter = ''
 
-        """ Resolution: 
-            width/height > 16:10, eg:16:9, 16:10, 5:3 -> 856x480 
+        """ Resolution:
+            width/height > 16:10, eg:16:9, 16:10, 5:3 -> 856x480
             other width/height < 16:10                -> 640x480
         """
         width   = info.get('vWidth')
@@ -181,14 +181,17 @@ class MediaXMlParser:
         self.mediaInfo = {}
 
     def parser(self, xmlString):
-        # Strip the erorr message generate by ffprobe that before xml body.
+        # Strip the erorr message generate by ffprobe that out of xml body.
         xmlStart = xmlString.find('<?xml')
-        validXml = xmlString[xmlStart:]
+        xmlEnd = xmlString.find('</ffprobe>')
+        validXml = xmlString[xmlStart:xmlEnd+10]
 
-        # print 'xml --->' ,len(xmlString)
-        # xmlHandle = open('probe.xml', 'a')
-        # xmlHandle.write(xmlString)
-        # xmlHandle.close()
+       # print 'xml --->' ,len(xmlString)
+       # xmlHandle = open(str(len(xmlString))+'probe.xml', 'a')
+       # xmlHandle.write(xmlString)
+       # xmlHandle.write('------------------------------\n')
+       # xmlHandle.write(validXml)
+       # xmlHandle.close()
 
         try:
             root = ET.fromstring(validXml)
