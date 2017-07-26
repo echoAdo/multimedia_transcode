@@ -38,12 +38,13 @@ class FileProcess:
     def moveFile(self, src, dst):
         try:
             shutil.move(src, dst)
-        except IOError, e:
+        except Exception, e:
             print e
+
     def copyFile(self, src, dst):
         try:
-            shutil.copy(self.srcFile, dstFile)
-        except IOError, e:
+            shutil.copy(src, dst)
+        except Exception, e:
             print e
         return None
 
