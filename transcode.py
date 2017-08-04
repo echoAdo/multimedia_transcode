@@ -3,6 +3,7 @@
 import string
 import os
 import os.path
+import sys
 import platform
 import subprocess
 import shutil
@@ -21,13 +22,26 @@ def runShellCommand(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT):
     return result[0]
 
 class FileProcess:
-    def __init__(self):
-        self.srcDirectory = "input"
-        self.dstDirectory = "output" + os.sep
-        self.failedDirectory = "failed" + os.sep# transcode failed file dierctory
+    def __init__(self, logo):
         self.srcFile = ''
         self.cmdPath = ''
+        self.logoAdd = logo
 
+        system = platform.system();
+        print "Current system is :" + system
+        prefix = ''
+        if system == "Windows":
+            self.cmdPath = os.getcwd() + os.sep + "winFFmpeg" + os.sep
+            prefix = '..' + os.sep
+        elif system =="Darwin" or system == "Linux":
+            pass
+
+        self.srcDirectory = prefix + "input"
+        self.failedDirectory = prefix + "failed" + os.sep # transcode failed file dierctory
+        if self.logoAdd:
+            self.dstDirectory = prefix + "output_withLogo" + os.sep
+        else:
+            self.dstDirectory = prefix + "output" + os.sep
         if not os.path.exists(self.dstDirectory):
             os.makedirs(self.dstDirectory)
         if not os.path.exists(self.failedDirectory):
@@ -49,14 +63,6 @@ class FileProcess:
         return None
 
     def browserDirectory(self):
-        system = platform.system();
-        print "Current system is :" + system
-
-        if system == "Windows":
-            self.cmdPath = os.getcwd() + os.sep + "winFFmpeg" + os.sep
-        elif system =="Darwin" or system == "Linux":
-            pass
-
         list_dirs = os.walk(self.srcDirectory)
         for root, dirs, files in list_dirs:
             for f in files:
@@ -70,6 +76,7 @@ class FileProcess:
                 print self.srcFile;
 
                 ffprobeCmd = self.cmdPath + self.ffprobePrefix + self.srcFile
+                print ffprobeCmd
                 xml = runShellCommand(ffprobeCmd)
                 if xml is None:
                     self.moveFile(self.srcFile, self.failedDirectory + newFileName)
@@ -150,6 +157,10 @@ class FileProcess:
         if string.atoi(info.get('aBitRate')) <= 128000: aBR = info.get('aBitRate')
         else: aBR = '128k'
 
+        if self.logoAdd:
+            addLogo = '-vf "movie=logo.png [watermark];[in][watermark] overlay=main_w-overlay_w-15:15 [out]"'
+        else: addLogo = ''
+
         system = platform.system();
         if system == "Windows":
             cmdJoinSep = ' NUL & '
@@ -162,8 +173,8 @@ class FileProcess:
 
         ffmpegPass1 = '%sffmpeg -i %s -pass 1 -y -v error -c:v libx264  %s -s:v %s -r %s -c:a aac -ar 44100 -ac 2 -ab %s %s -f mp4 ' \
                       % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, aBR, ABR_VBV)
-        ffmpegPass2 = '%sffmpeg -i %s -pass 2 -y -v error -c:v libx264  %s -s:v %s -r %s -c:a aac -ar 44100 -ac 2 -ab %s %s %s' \
-                      % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, aBR, ABR_VBV, dstFile)
+        ffmpegPass2 = '%sffmpeg -i %s -pass 2 -y -v error -c:v libx264  %s -s:v %s -r %s %s -c:a aac -ar 44100 -ac 2 -ab %s %s %s' \
+                      % (self.cmdPath, self.srcFile, vIDRFrameInter, vResolution, vFrameRate, addLogo, aBR, ABR_VBV, dstFile)
 
         ffmpegCmd = ffmpegPass1 + cmdJoinSep + ffmpegPass2
 
@@ -267,5 +278,10 @@ if __name__ == '__main__':
     #     print "Usage:\n    python transcode.py srcDirectory dstDirectory";
     #     exit();
 
-    obj_fileProcess = FileProcess()
+    if len(sys.argv) == 2:
+        logo = sys.argv[1] != '0' and True or False
+    else:
+        logo = False
+
+    obj_fileProcess = FileProcess(logo)
     obj_fileProcess.browserDirectory()
