@@ -108,7 +108,7 @@ class FileProcess:
         dstFile = self.dstDirectory + fileName[0:fileName.rfind('.')] + '.mp4'
 
         ''''File is suitable for streaming, no transcode'''
-        if (info.get('gFormatName').find('mp4') != -1) and  (info.get('vCodecName') == 'h264') \
+        if ((not self.logoAdd) and info.get('gFormatName').find('mp4') != -1) and  (info.get('vCodecName') == 'h264') \
             and  (info.get('aCodecName') == 'aac') and (string.atoi(info.get('vBitRate')) <= 800000) \
             and ((string.atoi(info.get('vWidth')) <= 856) or (string.atoi(info.get('vHeight')) <= 480)):
 
